@@ -1,11 +1,134 @@
-from sklearn.preprocessing import LabelBinarizer
-from tensorflow import keras
-from PIL import Image
-
-import numpy as np
-import pandas as pd
 import streamlit as st
-import tensorflow as tf
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
+import cv2
+import mediapipe as mp
+from keras.models import load_model
+import numpy as np
+import time
+import pandas as pd
+
+#model = load_model('model.h5')
+model = load_model('model.h5', compile=False)
+
+mphands = mp.solutions.hands
+hands = mphands.Hands()
+mp_drawing = mp.solutions.drawing_utils
+cap = cv2.VideoCapture(0)
+
+_, frame = cap.read()
+
+h, w, c = frame.shape
+
+img_counter = 0
+analysisframe = ''
+letterpred = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y']
+while True:
+    _, frame = cap.read()
+
+    k = cv2.waitKey(1)
+    if k%256 == 27:
+        # ESC pressed
+        print("Escape hit, closing...")
+        break
+    elif k%256 == 32:
+        # SPACE pressed
+        analysisframe = frame
+        showframe = analysisframe
+        cv2.imshow("Frame", showframe)
+        framergbanalysis = cv2.cvtColor(analysisframe, cv2.COLOR_BGR2RGB)
+        resultanalysis = hands.process(framergbanalysis)
+        hand_landmarksanalysis = resultanalysis.multi_hand_landmarks
+        if hand_landmarksanalysis:
+            for handLMsanalysis in hand_landmarksanalysis:
+                x_max = 0
+                y_max = 0
+                x_min = w
+                y_min = h
+                for lmanalysis in handLMsanalysis.landmark:
+                    x, y = int(lmanalysis.x * w), int(lmanalysis.y * h)
+                    if x > x_max:
+                        x_max = x
+                    if x < x_min:
+                        x_min = x
+                    if y > y_max:
+                        y_max = y
+                    if y < y_min:
+                        y_min = y
+                y_min -= 20
+                y_max += 20
+                x_min -= 20
+                x_max += 20 
+
+        analysisframe = cv2.cvtColor(analysisframe, cv2.COLOR_BGR2GRAY)
+        analysisframe = analysisframe[y_min:y_max, x_min:x_max]
+        analysisframe = cv2.resize(analysisframe,(28,28))
+
+
+        nlist = []
+        rows,cols = analysisframe.shape
+        for i in range(rows):
+            for j in range(cols):
+                k = analysisframe[i,j]
+                nlist.append(k)
+        
+        datan = pd.DataFrame(nlist).T
+        colname = []
+        for val in range(784):
+            colname.append(val)
+        datan.columns = colname
+
+        pixeldata = datan.values
+        pixeldata = pixeldata / 255
+        pixeldata = pixeldata.reshape(-1,28,28,1)
+        prediction = model.predict(pixeldata)
+        predarray = np.array(prediction[0])
+        letter_prediction_dict = {letterpred[i]: predarray[i] for i in range(len(letterpred))}
+        predarrayordered = sorted(predarray, reverse=True)
+        high1 = predarrayordered[0]
+        high2 = predarrayordered[1]
+        high3 = predarrayordered[2]
+        for key,value in letter_prediction_dict.items():
+            if value==high1:
+                print("Predicted Character 1: ", key)
+                print('Confidence 1: ', 100*value)
+            elif value==high2:
+                print("Predicted Character 2: ", key)
+                print('Confidence 2: ', 100*value)
+            elif value==high3:
+                print("Predicted Character 3: ", key)
+                print('Confidence 3: ', 100*value)
+        time.sleep(5)
+
+    framergb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    result = hands.process(framergb)
+    hand_landmarks = result.multi_hand_landmarks
+    if hand_landmarks:
+        for handLMs in hand_landmarks:
+            x_max = 0
+            y_max = 0
+            x_min = w
+            y_min = h
+            for lm in handLMs.landmark:
+                x, y = int(lm.x * w), int(lm.y * h)
+                if x > x_max:
+                    x_max = x
+                if x < x_min:
+                    x_min = x
+                if y > y_max:
+                    y_max = y
+                if y < y_min:
+                    y_min = y
+            y_min -= 20
+            y_max += 20
+            x_min -= 20
+            x_max += 20
+            cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
+    cv2.imshow("Frame", frame)
+
+cap.release()
+cv2.destroyAllWindows()
+
 
 st.set_page_config(page_title='ASL Recognition')
 st.title('Sign Language Recognition')
@@ -16,64 +139,7 @@ st.markdown("""
     </style> 
     """, unsafe_allow_html=True)
 
-@st.cache(allow_output_mutation=True)
-def get_best_model():
-    best_model = keras.models.load_model('models/experiment-dropout-0')
-    return best_model
 
-@st.cache
-def get_label_binarizer():
-    train_df = pd.read_csv('data/alphabet/sign_mnist_train.csv')
-    y = train_df['label']
-    label_binarizer = LabelBinarizer()
-    y = label_binarizer.fit_transform(y)
-    return label_binarizer
 
-def preprocess_image(image, image_file, best_model, label_binarizer):
-    # image: numpy array
-
-    # To display the uploaded image
-    # image_width = image.shape[0]
-    # st.image(image_file, caption='Uploaded Image', width=max(image_width, 100))
-
-    image = tf.reshape(image, [image.shape[0], image.shape[1], 1])
-    image = image/255
-    image = tf.image.resize(image, [28, 28], preserve_aspect_ratio=True)
-    
-    preprocessed_image = np.ones((1, 28, 28, 1))
-    preprocessed_image[0, :image.shape[0], :image.shape[1], :] = image
-    
-    prediction = best_model.predict(preprocessed_image)
-    
-    index_to_letter_map = {i:chr(ord('a') + i) for i in range(26)}
-    letter = index_to_letter_map[label_binarizer.inverse_transform(prediction)[0]]
-
-    return letter
-
-best_model = get_best_model()
-label_binarizer = get_label_binarizer()
-
-st.markdown('You can find the Convolutional Neural Netowrk used [here](https://github.com/Sathwick-Reddy-M/Sign-Language-Recognition)')
-st.markdown('For a detailed explaination please refer [this](https://towardsdatascience.com/sign-language-to-text-using-deep-learning-7f9c8018c593) article')
 st.markdown('Use 28x28 images (size of the training images) to obtain the accurate results')
 
-st.subheader('Convert Image to English letter')
-image_file = st.file_uploader('Choose the ASL Image', ['jpg', 'png'])
-
-if image_file is not None:
-    image = Image.open(image_file).convert('L')
-    image = np.array(image, dtype='float32')
-    letter = preprocess_image(image, image_file, best_model, label_binarizer)
-    st.write(f'The image is predicted as {letter}')
-
-st.subheader('Convert images to English sentence')
-sentence_image_files = st.file_uploader('Select the ASL Images', ['jpg', 'png'], accept_multiple_files = True)
-
-if len(sentence_image_files) > 0:
-    sentence = ''
-    for image_file in sentence_image_files:
-        image = Image.open(image_file).convert('L')
-        image = np.array(image, dtype='float32')
-        letter = preprocess_image(image, image_file, best_model, label_binarizer)
-        sentence += letter
-    st.write(f'The sentence is predicted as {sentence}')
